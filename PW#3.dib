@@ -32,21 +32,34 @@
 
 #!csharp
 
-//
-// Вычисление определенного интеграла
-//
+using System.Threading;
+
 class DefiniteIntegral
 {
-    //
-    // a, b - границы отрезка, на котором происходит вычисление опредленного интеграла
-    // function - функция, для которой вычисляется определнный интеграл
-    // step - размер одного шага разбиения
-    // threadsNumber - число потоков, которые используются для вычислений
-    //
-    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        double answer = 0;
+        double threadStep = (b-a)/threadsnumber;
+        double[] midResults = new double[threadsnumber];
+        Barrier barrier = new Barrier(threadsnumber, (bar) => {
+            foreach (double i in midResults) {
+                answer += i;
+            }
+        });
+        Parallel.For(0, threadsnumber, (i) => {
+            double a1 = a + i * threadStep;
+            double b1 = a + (i+1) * threadStep;
+            midResults[i] = OneThreadSolve(a1, b1, function, step);
+            barrier.SignalAndWait();
+        });
+        return answer;
+    }
+    public static double OneThreadSolve(double a, double b, Func<double, double> function, double step) {
+        double sum = 0.5 * (a+b);
+        for (int i = 1; b-(a + i*step) > 1E-7; i++) {
+            sum += function(a+i*step);
+        }
+        return sum * step;
     }
 }
 
@@ -63,4 +76,4 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
-Assert.Equal(10, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
