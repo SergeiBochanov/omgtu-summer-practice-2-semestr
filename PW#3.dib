@@ -32,23 +32,135 @@
 
 #!csharp
 
-//
-// Вычисление определенного интеграла
-//
+using System.Threading;
+
 class DefiniteIntegral
 {
-    //
-    // a, b - границы отрезка, на котором происходит вычисление опредленного интеграла
-    // function - функция, для которой вычисляется определнный интеграл
-    // step - размер одного шага разбиения
-    // threadsNumber - число потоков, которые используются для вычислений
-    //
-    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        double answer = 0;
+        double threadStep = (b-a)/threadsnumber;
+        double[] midResults = new double[threadsnumber];
+        Barrier barrier = new Barrier(threadsnumber, (bar) => {
+            foreach (double i in midResults) {
+                answer += i;
+            }
+        });
+        Parallel.For(0, threadsnumber, (i) => {
+            double a1 = a + i * threadStep;
+            double b1 = a + (i+1) * threadStep;
+            midResults[i] = OneThreadSolve(a1, b1, function, step);
+            barrier.SignalAndWait();
+        });
+        return answer;
+    }
+    public static double OneThreadSolve(double a, double b, Func<double, double> function, double step) {
+        double sum = 0.5 * (a+b);
+        for (int i = 1; b-(a + i*step) > 1E-7; i++) {
+            sum += function(a+i*step);
+        }
+        return sum * step;
     }
 }
+
+#!csharp
+
+#r "nuget:ScottPlot, 5.0.35"
+
+using System.Diagnostics;
+using Microsoft.DotNet.Interactive.Formatting;
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+var SIN = (double x) => Math.Sin(x);
+
+Stopwatch stopwatch = new Stopwatch();
+
+double optimalStep; 
+var optimalStepTime = TimeSpan.MaxValue;
+double[] steps = new double[6] {1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6};
+foreach (double i in steps){
+    stopwatch.Start();
+    var answer = DefiniteIntegral.Solve(-100, 100, SIN, i, 8);
+    stopwatch.Stop();
+    TimeSpan ts = stopwatch.Elapsed;
+    stopwatch.Reset();
+    if (Math.Abs(answer) > 1e-4) continue;
+    if (ts < optimalStepTime){
+        optimalStepTime = ts;
+        optimalStep = i;
+    }
+}
+
+double[] dataY = {2, 3, 4, 5, 6, 7, 8, 9, 10};
+double[] dataX = new double[9];
+int optimalThreads = 0;
+foreach (int i in dataY)
+{
+    var averageTime = TimeSpan.Zero;
+    for (int j = 0; j < 20; j++)
+    {
+        stopwatch.Start();
+        DefiniteIntegral.Solve(-100, 100, SIN, optimalStep, i);
+        stopwatch.Stop();
+        TimeSpan ts = stopwatch.Elapsed;
+        averageTime += ts;
+        stopwatch.Reset();
+    }
+    averageTime *= 0.05;
+    dataX[i - 2] = averageTime.Milliseconds + (double)averageTime.Microseconds/1000;
+    if (optimalThreads == 0) {
+        optimalThreads = i;
+    } else {
+        if (dataX[i - 2] < dataX[optimalThreads - 2]){
+            optimalThreads = i;
+        }
+    }
+}
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+
+TimeSpan timeSpan = TimeSpan.Zero;
+for (int i = 0; i < 20; i++)
+{
+    stopwatch.Start();
+    var answ2 = DefiniteIntegral.OneThreadSolve(-100, 100, SIN, optimalStep);
+    stopwatch.Stop();
+    TimeSpan ts = stopwatch.Elapsed;
+    timeSpan += ts;
+    stopwatch.Reset();
+}
+timeSpan *= 0.05;
+double oneThreadTime = timeSpan.Milliseconds + (double)timeSpan.Microseconds/1000;
+
+#!csharp
+
+plt
+
+#!csharp
+
+Console.WriteLine($"Оптимальный шаг: {optimalStep}");
+Console.WriteLine($"Оптимальное число потоков: {optimalThreads}, программа выполняется за время: {dataX[optimalThreads-2]} ms");
+Console.WriteLine($"Время выполнения однопоточной программы: {oneThreadTime} ms");
+if (oneThreadTime < dataX[optimalThreads-2]) {
+    Console.WriteLine("Многопоточный вариант медленнее однопоточного");
+} else {
+    Console.WriteLine($"Многопоточный вариант быстрее однопоточного на {(oneThreadTime-dataX[optimalThreads-2])/oneThreadTime*100}%");
+}
+
+#!markdown
+
+**Summary**
+
+Оптимальный шаг: 0.01
+
+Оптимальное число потоков: 8, программа выполняется за время: 0.151 ms
+
+Время выполнения однопоточной программы: 0.49 ms
+
+Многопоточный вариант быстрее однопоточного на 69.18367346938776%
 
 #!csharp
 
@@ -63,4 +175,4 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
-Assert.Equal(10, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
