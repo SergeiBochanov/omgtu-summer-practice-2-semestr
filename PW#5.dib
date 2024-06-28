@@ -57,10 +57,38 @@ class Message
 
 using System.Collections.Concurrent;
 
-var queue1 = new BlockingCollection<Message>(2); //очередь первого потока
-var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
+static var queue1 = new BlockingCollection<Message>(2); //очередь первого потока
+static var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
 
-// Здесь писать решение
+queue1.Add(new Message());
+static int p = 0; static int c = 0;
+static void Producer() 
+{
+    while (p < 100){
+        if (p == c) {
+            Message msg = queue1.Take();
+            msg.Handle();
+            queue2.Add(new Message());
+            Interlocked.Increment(ref p);
+        }
+    }
+}
+static void Consumer()
+{
+    while (c < 100){
+        if (p > c) {
+            Message msg = queue2.Take();
+            msg.Handle();
+            if (p != 100)
+                queue1.Add(new Message());
+            Interlocked.Increment(ref c);
+        }
+    }
+}
+Thread producer = new Thread(Producer);
+Thread consumer = new Thread(Consumer);
+producer.Start();
+consumer.Start();
 
 #!csharp
 
