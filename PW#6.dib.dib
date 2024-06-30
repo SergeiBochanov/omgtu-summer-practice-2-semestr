@@ -41,6 +41,170 @@
 
 // здесь писать код
 
+#!csharp
+
+#r "nuget:ScottPlot, 5.0.35"
+
+using System.Diagnostics;
+using System.Threading;
+using System.Collections.Concurrent;
+using Microsoft.DotNet.Interactive.Formatting;
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+var blockingCollection = new BlockingCollection<object>();
+var concurrentQueue = new ConcurrentQueue<object>();
+var queue = new Queue();
+
+Stopwatch stopwatch = new Stopwatch();
+
+var mre = new ManualResetEvent(false);
+
+int c = 0;
+int threadsLaunched = 0;
+Barrier barrier = new Barrier(2, (bar) => {
+    stopwatch.Stop();
+    TimeSpan ts = stopwatch.Elapsed;
+    Console.WriteLine("BlockingCollection: " + (ts.Milliseconds + (double)ts.Microseconds/1000) + " ms");
+    dataBlocking.Add(ts.Milliseconds + (double)ts.Microseconds/1000);
+});
+
+void Writer()
+{
+    Interlocked.Increment(ref threadsLaunched);
+    mre.WaitOne();
+    stopwatch.Restart();
+    for (int i = 0; i < 1000000; i++)
+    {
+        blockingCollection.Add(new ());
+    }
+}
+
+void Reader()
+{
+    Interlocked.Increment(ref threadsLaunched);
+    mre.WaitOne();
+    while (c < 1000000)
+    {
+        if (blockingCollection.TryTake(out object localValue))
+            Interlocked.Increment(ref c);
+    }
+    barrier.SignalAndWait();
+}
+
+List<double> dataBlocking = new List<double>();
+for (int k = 0; k < 10; k++)
+{
+    c = 0;
+    threadsLaunched = 0;
+    Thread writer = new Thread(Writer);
+    Thread reader = new Thread(Reader);
+    writer.Start();
+    reader.Start();
+
+    while (true)
+    {
+        if (threadsLaunched == 2)
+        {
+            mre.Set();
+            break;
+        }
+    }
+    barrier.SignalAndWait();
+}
+Console.WriteLine("Среднее время BlockingCollection: " + dataBlocking.Average() + " ms");
+
+
+int c2;
+threadsLaunched = 0;
+mre.Reset();
+Barrier barrier2 = new Barrier(2, (bar) => {
+    stopwatch.Stop();
+    TimeSpan ts1 = stopwatch.Elapsed;
+    Console.WriteLine("ConcurrentQueue: " + (ts1.Milliseconds + (double)ts1.Microseconds/1000) + " ms");
+    dataConcurrent.Add(ts1.Milliseconds + (double)ts1.Microseconds/1000);
+});
+
+void Writer2()
+{
+    Interlocked.Increment(ref threadsLaunched);
+    mre.WaitOne();
+    stopwatch.Restart();
+    for (int i = 0; i < 1000000; i++)
+    {
+        concurrentQueue.Enqueue(new ());
+    }
+}
+
+void Reader2() 
+{
+    Interlocked.Increment(ref threadsLaunched);
+    mre.WaitOne();
+    while (c2 < 1000000)
+    {
+        if (concurrentQueue.TryDequeue(out object localValue))
+            Interlocked.Increment(ref c2);
+    }
+    barrier2.SignalAndWait();
+}
+
+List<double> dataConcurrent = new List<double>();
+for (int k = 0; k < 10; k++)
+{
+    c2 = 0;
+    threadsLaunched = 0;
+    Thread writer2 = new Thread(Writer2);
+    Thread reader2 = new Thread(Reader2);
+    writer2.Start();
+    reader2.Start();
+    while (true)
+    {
+        if (threadsLaunched == 2)
+        {
+            mre.Set();
+            break;
+        }
+    }
+    barrier2.SignalAndWait();
+}
+Console.WriteLine("Среднее время ConcurrentQueue: " + dataConcurrent.Average() + " ms");
+
+List<double> dataQueue = new List<double>();
+for (int k = 0; k < 10; k++)
+{
+    stopwatch.Restart();
+    for (int i = 0; i < 1000000; i++)
+    {
+        queue.Enqueue(new ());
+    }
+    for (int i = 0; i < 1000000; i++)
+    {
+        queue.Dequeue();
+    }
+    stopwatch.Stop();
+    TimeSpan ts2 = stopwatch.Elapsed;
+    Console.WriteLine("Обычная очередь: " + (ts2.Milliseconds + (double)ts2.Microseconds/1000) + " ms");
+    dataQueue.Add(ts2.Milliseconds + (double)ts2.Microseconds/1000);
+}
+Console.WriteLine("Среднее время обычной очереди: " + dataQueue.Average() + " ms");
+
+Console.WriteLine($"ConcurrentQueue быстрее обычной очереди на {(dataQueue.Average()-dataConcurrent.Average())/dataQueue.Average()*100}%");
+
+#!csharp
+
+double[] iterations = new double[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+ScottPlot.Plot plt = new ();
+var sig1 = plt.Add.Scatter(iterations, dataBlocking.ToArray());
+sig1.LegendText = "BlockingCollection";
+var sig2 = plt.Add.Scatter(iterations, dataConcurrent.ToArray());
+sig2.LegendText = "ConcurrentQueue";
+var sig3 = plt.Add.Scatter(iterations, dataQueue.ToArray());
+sig3.LegendText = "Обычная очередь";
+plt.ShowLegend(ScottPlot.Edge.Bottom);
+plt
+
 #!markdown
 
 ## Вывод
+Самой эффективной оказалась коллекция ConcurrentQueue (28.3 ms в среднем), скорость которой на 30% превышает скорость обычной очереди (40.4 ms в среднем)
