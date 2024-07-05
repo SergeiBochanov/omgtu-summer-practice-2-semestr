@@ -20,11 +20,41 @@
 
 #!csharp
 
-interface ICommand
+using System.Threading;
+using System.Collections.Concurrent;
+
+public interface ICommand
 {
     void Execute();
 }
 
+public interface IScheduler
+{
+    bool HasCommand();
+    ICommand Select();
+    void Add(ICommand cmd);
+}
+
+class Scheduler:IScheduler
+{
+    public BlockingCollection<ICommand> schedulerQueue = new BlockingCollection<ICommand>();
+    public bool HasCommand()
+    {
+        return schedulerQueue.Count > 0;
+    }
+
+    public ICommand Select()
+    {
+        return schedulerQueue.Take();
+    }
+
+    public void Add(ICommand cmd)
+    {
+        schedulerQueue.Add(cmd);
+    }
+}
+
+static Scheduler scheduler = new Scheduler();
 
 public class TestCommand(int id) : ICommand
 {
@@ -33,8 +63,119 @@ public class TestCommand(int id) : ICommand
     public void Execute()
     {
         Console.WriteLine($"Поток {id} вызов {++counter}");
+        if (counter < 3)
+        {
+            scheduler.Add(this);
+        }
     }
 }
+
+#!csharp
+
+public static ConcurrentQueue<Thread> roundRobinQueue = new ConcurrentQueue<Thread>();
+
+class ServerThread
+{
+    public ConcurrentQueue<ICommand> commandsQueue = new ConcurrentQueue<ICommand>();
+    public bool isContinue = true;
+    public bool softStopRequested = false;
+    public void ThreadProcess()
+    {
+        while (isContinue)
+        {
+            roundRobinQueue.TryPeek(out var t);
+            var thread = t;
+            while (!thread.IsAlive || thread == null)
+            {
+                roundRobinQueue.TryDequeue(out var a);
+                roundRobinQueue.TryPeek(out var k);
+                thread = k;
+            }
+            if (scheduler.HasCommand() && thread == Thread.CurrentThread)
+            {
+                roundRobinQueue.TryDequeue(out var trd);
+                roundRobinQueue.Enqueue(trd);
+                var command = scheduler.Select();
+                command.Execute();
+            }
+            else if ((!scheduler.HasCommand() && commandsQueue.Count > 0) || scheduler.HasCommand())
+            {
+                if (commandsQueue.TryDequeue(out var command))
+                {
+                    try
+                    {
+                        command.Execute();
+                    }
+                    catch (Exception)
+                    {
+                        Console.WriteLine("Произошла ошибка");
+                    }
+                }
+            }
+            else if (softStopRequested == true)
+            {
+                Thread.Sleep(100);
+                if (!scheduler.HasCommand() && commandsQueue.Count == 0)
+                {
+                    break;
+                }
+            }
+        }
+        Console.WriteLine($"Поток завершён");
+    }
+}
+
+class HardStop:ICommand
+{
+    ServerThread st;
+    public HardStop(ServerThread st)
+    {
+        this.st = st;
+    }
+
+    public void Execute()
+    {
+        if (roundRobinQueue.Contains(Thread.CurrentThread))
+            st.isContinue = false;
+        else
+            throw new Exception("Команда выполняется не в потоке");
+    }
+}
+
+class SoftStop:ICommand
+{
+    ServerThread st;
+    public SoftStop(ServerThread st)
+    {
+        this.st = st;
+    }
+
+    public void Execute()
+    {
+        if (roundRobinQueue.Contains(Thread.CurrentThread))
+        {
+            st.softStopRequested = true;
+        }
+        else
+            throw new Exception("Команда выполняется не в потоке");
+    }
+}
+
+ServerThread st = new ServerThread();
+
+st.commandsQueue.Enqueue(new TestCommand(0));
+st.commandsQueue.Enqueue(new TestCommand(0));
+st.commandsQueue.Enqueue(new TestCommand(0));
+st.commandsQueue.Enqueue(new TestCommand(0));
+st.commandsQueue.Enqueue(new TestCommand(0));
+st.commandsQueue.Enqueue(new HardStop(st));
+
+Thread myThread = new Thread(st.ThreadProcess);
+
+roundRobinQueue.Enqueue(myThread);
+
+myThread.Start();
+myThread.Join();
 
 #!markdown
 
