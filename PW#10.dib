@@ -140,13 +140,13 @@ class ServerThread
                 }
             }
         }
-        Console.WriteLine($"Поток завершён, {messageQueue.Count}");
+        Console.WriteLine($"Поток завершён");
     }
 }
 
 #!csharp
 
-public List<ServerThread> threadsList = new List<ServerThread>();
+static List<ServerThread> threadsList = new List<ServerThread>();
 
 class Router:ICommand
 {
@@ -193,7 +193,7 @@ class LongLastingCommand:ICommand
     public void Execute()
     {
         alreadyDone++;
-        Console.WriteLine(alreadyDone);
+        Thread.Sleep(10);
         if (alreadyDone != target)
         {
             scheduler.Add(this);
@@ -255,12 +255,14 @@ st.commandsQueue.Enqueue(new LongLastingCommand(1, router));
 st.messageQueue.Enqueue(new Message(0, "message"));
 st.messageQueue.Enqueue(new Message(1, "message"));
 st.messageQueue.Enqueue(new Message(123, "message"));
-st.commandsQueue.Enqueue(router);
+st2.commandsQueue.Enqueue(router);
+st2.commandsQueue.Enqueue(router);
+st2.commandsQueue.Enqueue(router);
 st.commandsQueue.Enqueue(new SoftStop(st));
-st.commandsQueue.Enqueue(new SoftStop(st2));
+st2.commandsQueue.Enqueue(new SoftStop(st2));
 
 Thread myThread = new Thread(st.ThreadProcess);
-Thread myThread2 = new Thread(st.ThreadProcess);
+Thread myThread2 = new Thread(st2.ThreadProcess);
 
 roundRobinQueue.Enqueue(myThread);
 
