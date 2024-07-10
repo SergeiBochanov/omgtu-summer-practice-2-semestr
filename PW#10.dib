@@ -36,3 +36,237 @@
 1. [Паттерн Сообщение](https://www.enterpriseintegrationpatterns.com/patterns/messaging/Message.html)
 2. [Паттерн Роутер - весь раздел про Роутеры](https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageRoutingIntro.html)
 3. [Обмен сообщеними](https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageConstructionIntro.html)
+
+#!csharp
+
+public interface ICommand
+{
+    void Execute();
+}
+
+public interface IScheduler
+{
+    bool HasCommand();
+    ICommand Select();
+    void Add(ICommand cmd);
+}
+
+#!csharp
+
+using System.Threading;
+using System.Collections.Concurrent;
+
+class Scheduler:IScheduler
+{
+    public BlockingCollection<ICommand> schedulerQueue = new BlockingCollection<ICommand>();
+    public bool HasCommand()
+    {
+        return schedulerQueue.Count > 0;
+    }
+
+    public ICommand Select()
+    {
+        return schedulerQueue.Take();
+    }
+
+    public void Add(ICommand cmd)
+    {
+        schedulerQueue.Add(cmd);
+    }
+}
+
+class Message
+{
+    public int id;
+    public object data;
+
+    public Message(int id, object data)
+    {
+        this.id = id;
+        this.data = data;
+    }
+}
+
+#!csharp
+
+static Scheduler scheduler = new Scheduler();
+public static ConcurrentQueue<Thread> roundRobinQueue = new ConcurrentQueue<Thread>();
+
+class ServerThread
+{
+    public ConcurrentQueue<Message> messageQueue = new ConcurrentQueue<Message>();
+    public ConcurrentQueue<ICommand> commandsQueue = new ConcurrentQueue<ICommand>();
+    public bool isContinue = true;
+    public bool softStopRequested = false;
+    public void ThreadProcess()
+    {
+        while (isContinue)
+        {
+            roundRobinQueue.TryPeek(out var t);
+            var thread = t;
+            while (!thread.IsAlive || thread == null)
+            {
+                roundRobinQueue.TryDequeue(out var a);
+                roundRobinQueue.TryPeek(out var k);
+                thread = k;
+            }
+            if (scheduler.HasCommand() && thread == Thread.CurrentThread)
+            {
+                roundRobinQueue.TryDequeue(out var trd);
+                roundRobinQueue.Enqueue(trd);
+                var command = scheduler.Select();
+                command.Execute();
+            }
+            else if ((!scheduler.HasCommand() && commandsQueue.Count > 0) || scheduler.HasCommand())
+            {
+                if (commandsQueue.TryDequeue(out var command))
+                {
+                    try
+                    {
+                        command.Execute();
+                    }
+                    catch (Exception)
+                    {
+                        Console.WriteLine("Произошла ошибка");
+                    }
+                }
+            }
+            else if (softStopRequested == true)
+            {
+                Thread.Sleep(100);
+                if (!scheduler.HasCommand() && commandsQueue.Count == 0)
+                {
+                    break;
+                }
+            }
+        }
+        Console.WriteLine($"Поток завершён");
+    }
+}
+
+#!csharp
+
+static List<ServerThread> threadsList = new List<ServerThread>();
+
+class Router:ICommand
+{
+    public Dictionary<int, Queue<Message>> dict = new Dictionary<int, Queue<Message>>();
+    ServerThread st;
+
+    public Router(ServerThread st)
+    {
+        this.st = st;
+    }
+
+    public void Execute()
+    {
+        if (st.messageQueue.TryDequeue(out Message message))
+        {
+            if (dict.ContainsKey(message.id))
+            {
+                Console.WriteLine("Сообщение доставлено");
+                dict[message.id].Enqueue(message);
+            }
+            else
+            {
+                Console.WriteLine("ID команды не найден, невозможно доставить сообщение");
+            }
+        }
+    }
+}
+
+class LongLastingCommand:ICommand
+{
+    public int id;
+    public int alreadyDone = 0;
+    public int target = 5;
+    public Queue<Message> operationQueue = new Queue<Message>();
+    Router router;
+
+    public LongLastingCommand(int id, Router router)
+    {
+        this.id = id;
+        this.router = router;
+        router.dict.Add(id, operationQueue);
+    }
+
+    public void Execute()
+    {
+        alreadyDone++;
+        Thread.Sleep(10);
+        if (alreadyDone != target)
+        {
+            scheduler.Add(this);
+        }
+        else
+        {
+            router.dict.Remove(id);
+        }
+    }
+}
+
+class HardStop:ICommand
+{
+    ServerThread st;
+    public HardStop(ServerThread st)
+    {
+        this.st = st;
+    }
+
+    public void Execute()
+    {
+        if (threadsList.Contains(st))
+            st.isContinue = false;
+        else
+            throw new Exception("Команда выполняется не в потоке");
+    }
+}
+
+class SoftStop:ICommand
+{
+    ServerThread st;
+    public SoftStop(ServerThread st)
+    {
+        this.st = st;
+    }
+
+    public void Execute()
+    {
+        if (threadsList.Contains(st))
+        {
+            st.softStopRequested = true;
+        }
+        else
+            throw new Exception("Команда выполняется не в потоке");
+    }
+}
+
+#!csharp
+
+ServerThread st = new ServerThread();
+ServerThread st2 = new ServerThread();
+threadsList.Add(st);
+threadsList.Add(st2);
+
+Router router = new Router(st);
+
+st.commandsQueue.Enqueue(new LongLastingCommand(0, router));
+st.commandsQueue.Enqueue(new LongLastingCommand(1, router));
+st.messageQueue.Enqueue(new Message(0, "message"));
+st.messageQueue.Enqueue(new Message(1, "message"));
+st.messageQueue.Enqueue(new Message(123, "message"));
+st2.commandsQueue.Enqueue(router);
+st2.commandsQueue.Enqueue(router);
+st2.commandsQueue.Enqueue(router);
+st.commandsQueue.Enqueue(new SoftStop(st));
+st2.commandsQueue.Enqueue(new SoftStop(st2));
+
+Thread myThread = new Thread(st.ThreadProcess);
+Thread myThread2 = new Thread(st2.ThreadProcess);
+
+roundRobinQueue.Enqueue(myThread);
+
+myThread.Start();
+myThread2.Start();
+myThread.Join();
+myThread2.Join();
